@@ -1181,7 +1181,7 @@ class ComponentEmitterVhdl(
     s"pkg_toStdLogic(${emitExpression(e.left)} $vhd ${emitExpression(e.right)})"
   }
 
-  def boolLiteralImpl(e: BoolLiteral): String = s"pkg_toStdLogic(${e.value})"
+  def boolLiteralImpl(e: BoolLiteral): String = s"'${e.getBitsStringOn(1, 'X')}''"
 
   def moduloImpl(e: Operator.BitVector.Mod): String = {
     s"resize(${emitExpression(e.left)} mod ${emitExpression(e.right)},${e.getWidth})"
