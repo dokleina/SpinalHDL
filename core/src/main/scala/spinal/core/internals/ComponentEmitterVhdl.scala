@@ -46,6 +46,8 @@ class ComponentEmitterVhdl(
   val declarations = new StringBuilder()
   val logics       = new StringBuilder()
 
+  val boolAssignments = mutable.LinkedHashMap[Bool, AssignmentStatement]()
+
   override def readedOutputWrapEnable = true
 
   def getTrace() = new ComponentEmitterTrace(declarations :: logics :: Nil, portMaps)
@@ -188,6 +190,63 @@ class ComponentEmitterVhdl(
         }
       })
     })
+
+    // Find bool assignments
+    component.dslBody.walkLeafStatements {
+      case s: DataAssignmentStatement =>
+        s.finalTarget match {
+          case bool: Bool =>
+            boolAssignments.put(bool, s)
+          case _ =>
+        }
+      case _ =>
+    }
+
+//    {
+//      // Find assignments that likely exist because of a `when` condition
+//      //val standaloneAssignment = mutable.LinkedHashSet[Expression]()
+//      val whenMap = mutable.LinkedHashMap[WhenStatement, Bool]()
+//      val drivenBool = mutable.LinkedHashMap[Bool, AssignmentStatement]()
+//      val supportedBool =  mutable.LinkedHashSet[Bool]()
+//      val boolMap = mutable.LinkedHashMap[Expression, AssignmentStatement]()
+//      //Walk the Leaf Statements, these will be Assignments
+//      component.dslBody.walkLeafStatements {
+//        case s: DataAssignmentStatement =>
+//          s.finalTarget match {
+//            case bool: Bool =>
+//              // Assignment drives a bool
+//              drivenBool.put(bool, s)
+//            case _ =>
+//          }
+//      }
+//
+//      //Find all when
+//      component.dslBody.walkStatements {
+//        case s: WhenStatement => s.cond match {
+//        }
+//        case s: DataAssignmentStatement =>
+//
+//        case _ =>
+//      }
+//
+//      SpinalInfo(s"Found ${whenMap.size} when statements!")
+//      SpinalInfo(s"Found ${boolMap.size} Bool assignments!")
+//
+//      // Pair when to an assignment
+//      whenMap.foreach(s => {
+//        boolMap.get(s._2) match {
+//          case Some(e) => e match {
+//            case a: AssignmentStatement =>
+//              SpinalInfo(s"When with assignment ${a.finalTarget.asInstanceOf[Bool].name}")
+//            case b: Bool =>
+//              SpinalInfo(s"When with bool ${b.name}")
+//            case _ =>
+//          }
+//          case None =>
+//        }
+//      })
+//    }
+
 
     //Wrap expression which need it
     cutLongExpressions()
@@ -609,7 +668,14 @@ class ComponentEmitterVhdl(
         treeStatement match {
           case treeStatement: WhenStatement =>
             if(scopePtr == treeStatement.whenTrue){
-              b ++= s"${tab}if ${emitExpression(treeStatement.cond)} = '1' then\n"
+              // Get the real expression
+              boolAssignments.get(treeStatement.cond.asInstanceOf[Bool]) match {
+                case Some(s) =>
+                  b ++= s"${tab}if ${emitWhenExpression(s.source)} then\n"
+                case None =>
+                  // Fallback
+                  b ++= s"${tab}if ${emitExpression(treeStatement.cond)} = '1' then\n"
+              }
             } else if(lastWhen == treeStatement){
               //              if(scopePtr.sizeIsOne && scopePtr.head.isInstanceOf[WhenStatement]){
               //                b ++= s"${tab}if ${emitExpression(treeStatement.cond)} = '1' then\n"
@@ -774,6 +840,16 @@ class ComponentEmitterVhdl(
         referenceSetAdd(name)
         name
       case None => dispatchExpression(that)
+    }
+  }
+
+  def emitWhenExpression(that: Expression): String = {
+    that match {
+      case e: Operator.Bool.Equal => operatorImplAsBinaryOperator("=")(e)
+      case e: Operator.Bool.NotEqual => operatorImplAsBinaryOperator("=")(e)
+
+      case _ =>
+        dispatchExpression(that)
     }
   }
 
@@ -1181,7 +1257,7 @@ class ComponentEmitterVhdl(
     s"pkg_toStdLogic(${emitExpression(e.left)} $vhd ${emitExpression(e.right)})"
   }
 
-  def boolLiteralImpl(e: BoolLiteral): String = s"'${e.getBitsStringOn(1, 'X')}''"
+  def boolLiteralImpl(e: BoolLiteral): String = s"'${e.getBitsStringOn(1, 'X')}'"
 
   def moduloImpl(e: Operator.BitVector.Mod): String = {
     s"resize(${emitExpression(e.left)} mod ${emitExpression(e.right)},${e.getWidth})"
