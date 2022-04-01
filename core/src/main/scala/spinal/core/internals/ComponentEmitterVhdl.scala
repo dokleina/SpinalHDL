@@ -47,6 +47,7 @@ class ComponentEmitterVhdl(
   val logics       = new StringBuilder()
 
   val boolAssignments = mutable.LinkedHashMap[Bool, AssignmentStatement]()
+  val boolSources     = mutable.LinkedHashSet[Bool]()
 
   override def readedOutputWrapEnable = true
 
@@ -195,58 +196,31 @@ class ComponentEmitterVhdl(
     component.dslBody.walkLeafStatements {
       case s: DataAssignmentStatement =>
         s.finalTarget match {
-          case bool: Bool =>
-            boolAssignments.put(bool, s)
+          case target: Bool =>
+            // Mark the bool assignment
+            boolAssignments.put(target, s)
           case _ =>
         }
       case _ =>
     }
 
-//    {
-//      // Find assignments that likely exist because of a `when` condition
-//      //val standaloneAssignment = mutable.LinkedHashSet[Expression]()
-//      val whenMap = mutable.LinkedHashMap[WhenStatement, Bool]()
-//      val drivenBool = mutable.LinkedHashMap[Bool, AssignmentStatement]()
-//      val supportedBool =  mutable.LinkedHashSet[Bool]()
-//      val boolMap = mutable.LinkedHashMap[Expression, AssignmentStatement]()
-//      //Walk the Leaf Statements, these will be Assignments
-//      component.dslBody.walkLeafStatements {
-//        case s: DataAssignmentStatement =>
-//          s.finalTarget match {
-//            case bool: Bool =>
-//              // Assignment drives a bool
-//              drivenBool.put(bool, s)
-//            case _ =>
-//          }
-//      }
-//
-//      //Find all when
-//      component.dslBody.walkStatements {
-//        case s: WhenStatement => s.cond match {
-//        }
-//        case s: DataAssignmentStatement =>
-//
-//        case _ =>
-//      }
-//
-//      SpinalInfo(s"Found ${whenMap.size} when statements!")
-//      SpinalInfo(s"Found ${boolMap.size} Bool assignments!")
-//
-//      // Pair when to an assignment
-//      whenMap.foreach(s => {
-//        boolMap.get(s._2) match {
-//          case Some(e) => e match {
-//            case a: AssignmentStatement =>
-//              SpinalInfo(s"When with assignment ${a.finalTarget.asInstanceOf[Bool].name}")
-//            case b: Bool =>
-//              SpinalInfo(s"When with bool ${b.name}")
-//            case _ =>
-//          }
-//          case None =>
-//        }
-//      })
-//    }
-
+    // Find bool whose sources are in the boolAssignments set
+    component.dslBody.walkLeafStatements {
+      case s: DataAssignmentStatement =>
+        s.finalTarget match {
+          case target: Bool =>
+            s.source.walkExpression {
+              case source: Bool =>
+                if (boolAssignments.keySet.contains(source)) {
+                  // Add the Bool that was used as a source to another Bool
+                  boolSources += source
+                }
+              case _ =>
+            }
+          case _ =>
+        }
+      case _ =>
+    }
 
     //Wrap expression which need it
     cutLongExpressions()
@@ -556,7 +530,20 @@ class ComponentEmitterVhdl(
     process match {
       case _ if process.leafStatements.size == 1 && process.leafStatements.head.parentScope == process.nameableTargets.head.rootScopeStatement => process.leafStatements.head match {
         case s: AssignmentStatement =>
-          logics ++= emitAssignment(s, "  ", "<=")
+          def emit(s: AssignmentStatement): Unit = {
+            logics ++= emitAssignment(s, "  ", "<=")
+          }
+          s.finalTarget match {
+            case bool: Bool =>
+              // Only emit components that:
+              //  1. Part of a when but used elsewhere
+              //  2. Not part of a when
+              if ((boolAssignments.contains(bool) & boolSources.contains(bool)) | !boolAssignments.contains(bool)) {
+                emit(s)
+              }
+            case _ =>
+              emit(s)
+          }
       }
       case _ =>
         val tmp = new StringBuilder
@@ -671,7 +658,7 @@ class ComponentEmitterVhdl(
               // Get the real expression
               boolAssignments.get(treeStatement.cond.asInstanceOf[Bool]) match {
                 case Some(s) =>
-                  b ++= s"${tab}if ${emitWhenExpression(s.source)} then\n"
+                  b ++= s"${tab}if ${emitExpressionBoolean(s.source)} then\n"
                 case None =>
                   // Fallback
                   b ++= s"${tab}if ${emitExpression(treeStatement.cond)} = '1' then\n"
@@ -843,7 +830,7 @@ class ComponentEmitterVhdl(
     }
   }
 
-  def emitWhenExpression(that: Expression): String = {
+  def emitExpressionBoolean(that: Expression): String = {
     that match {
       case e: Operator.Bool.Equal => operatorImplAsBinaryOperator("=")(e)
       case e: Operator.Bool.NotEqual => operatorImplAsBinaryOperator("=")(e)
@@ -946,7 +933,16 @@ class ComponentEmitterVhdl(
     component.dslBody.walkDeclarations {
       case signal: BaseType =>
         if (!signal.isIo && !signal.isSuffix) {
-          declarations ++= s"  signal ${emitReference(signal, false)} : ${emitDataType(signal)}${getBaseTypeSignalInitialisation(signal)};\n"
+          def emit(signal: BaseType): Unit = {
+            declarations ++= s"  signal ${emitReference(signal, false)} : ${emitDataType(signal)}${getBaseTypeSignalInitialisation(signal)};\n"
+          }
+          // Prune out bool signals by checking if they only participate in a When
+          signal match {
+            case b: Bool =>
+              if((boolAssignments.contains(b) & boolSources.contains(b) | !boolAssignments.contains(b)))
+                emit(b)
+            case _ => emit _
+          }
         }
         emitAttributes(signal, signal.instanceAttributes(Language.VHDL), "signal", declarations)
       case mem: Mem[_] =>
