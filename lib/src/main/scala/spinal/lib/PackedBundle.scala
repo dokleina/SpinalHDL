@@ -2,6 +2,21 @@ package spinal.lib
 
 import spinal.core._
 
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+
+
+trait IDataPacker {
+  /**
+    * Handler method for new
+    * @param d
+    * @param range
+    */
+  def handleData(d : Data)
+
+  def getBitsWidth : Int
+}
+
 /**
   * Similar to Bundle but with bit packing capabilities.
   * Use pack implicit functions to assign fields to bit locations
@@ -20,9 +35,54 @@ import spinal.core._
   * }}}
   *
   */
-class PackedBundle extends Bundle {
+class PackedBundle(endianness : Endianness = LITTLE) extends Bundle {
 
-  class TagBitPackExact(val range: Range, val endianness: Endianness) extends SpinalTag
+  protected class BitPacker extends IDataPacker {
+
+    private val packMap = new mutable.LinkedHashMap[Data, (Range, Endianness)]()
+    private var nextBit = 0
+    private var highBit = 0
+
+    override def handleData(d: Data): Unit = {
+      val packTuple : (Range, Endianness) = d.getTag(classOf[BitPacker.TagBitPackExact]) match {
+        case Some(tag) => tag.range -> tag.endianness
+        case None => nextBit until nextBit + d.getBitsWidth -> endianness
+      }
+      nextBit = packTuple._1.max + 1
+      highBit = highBit.max(nextBit)
+
+      packMap.put(d, packTuple)
+    }
+
+    override def asBits : Bits = {
+      // `nextBit` will be the length of the
+      val packed = B(0, highBit bit)
+      packMap.foreach { case(data : Data, packTuple : (Range, Endianness)) =>
+        val range = packTuple._1
+        val dataSize = range.size.min(data.getBitsWidth)
+        packed(range) := packTuple._2 match {
+          case LITTLE => data.asBits.takeLow(dataSize).resize(range.size)
+          case BIG => data.asBits.takeHigh(dataSize).resizeLeft(range.size)
+        }
+
+      }
+      packed
+    }
+
+    override def getBitsWidth: Int = ???
+
+
+  }
+
+  protected object BitPacker {
+    def MakePackTag(range : Range, endianness : Endianness) : TagBitPackExact = {
+      new TagBitPackExact(range, endianness)
+    }
+
+    class TagBitPackExact(val range: Range, val endianness: Endianness) extends SpinalTag
+  }
+
+  protected val builder = new DataBitPacker()
 
   private def computePackMapping(): Seq[(Range, Data)] = {
     var lastPos = 0
@@ -91,6 +151,7 @@ class PackedBundle extends Bundle {
       */
     def pack(range: Range, endianness: Endianness = LITTLE): T = {
       t.addTag(new TagBitPackExact(range, endianness))
+      t.addTag(builder.make)
       t
     }
 
@@ -100,6 +161,7 @@ class PackedBundle extends Bundle {
       * @return Self
       */
     def packFrom(pos: Int): T = {
+      t.addTag(builder.MakeBitsTag)
       t.pack(pos + t.getBitsWidth - 1 downto pos)
     }
 
@@ -110,6 +172,88 @@ class PackedBundle extends Bundle {
       */
     def packTo(pos: Int): T = {
       t.pack(pos downto pos - t.getBitsWidth + 1)
+    }
+  }
+
+  override def valCallbackRec(ref: Any, name: String): Unit = {
+    super.valCallbackRec(ref, name)
+    ref match {
+      case ref: Data =>
+        // ToDo: Call factory
+      case _ =>
+    }
+  }
+}
+
+class PackedWordBundle(wordWidth : BitCount, endianness : Endianness = LITTLE) extends PackedBundle(endianness) {
+
+  protected class WordPacker(wordWidth : Int) extends IDataPacker {
+    val mappedElements = mutable.LinkedHashMap[Data, ArrayBuffer[(Int, Range)]]()
+    val mappedWords    = ArrayBuffer[ArrayBuffer[(Data, Range)]]()
+
+    override def handleData(d : Data) = {
+
+    }
+
+    private def mapToWord(index : Int, d : Data, r : Range) = {
+      // Ensure the range fits
+      require(r.min < wordWidth && r.max < wordWidth && r.min > 0)
+
+      if(index > (mappedWords.length-1)) {
+        // Insert empty words
+        mappedWords.appendAll(List.tabulate(index - mappedWords.length + 1)(_ => ArrayBuffer[(Data, Range)]()))
+      }
+
+      mappedWords(index).append((d, r))
+    }
+
+    def totalWords = mappedWords.length
+    def totalBits = totalWords * wordWidth
+  }
+
+  protected object WordPacker {
+
+  }
+
+  implicit class DataWordEnrich[T <: Data](t : T) {
+
+    /**
+      * Packs the data into the word given by the index.
+      * If the data does not fit entirely within the word it will wrap into subsequent words until all bits are packed.
+      * For explicit control of multiword pack, use `words`.
+      * @param index Word index to pack the data into
+      * @return Self
+      */
+    def word(index : Int): T = {
+
+      t
+    }
+
+    /**
+      * Packs a single data into multiple words with the given Word Index / Range pair.
+      * @param pairList List of Word Index / Range pairs
+      * @return Self
+      */
+    def words(pairList : List[(Int, Range)]) : T = {
+
+      t
+    }
+
+    /**
+      * Syntax shortcut to `words(List[(Int, Range)]`.
+      * @param pairs List of Word Index / Range tuples
+      * @return Self
+      */
+    def words(pairs : (Int, Range)*) : T = words(pairs.toList)
+
+    /**
+      * Places the data
+      * @param bit
+      * @return
+      */
+    def at(bit : Int) : T = {
+
+      t
     }
   }
 }
