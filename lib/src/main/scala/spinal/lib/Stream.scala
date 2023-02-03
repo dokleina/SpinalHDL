@@ -1957,3 +1957,103 @@ class StreamTransactionExtender[T <: Data, T2 <: Data](
     io.first := (counter.io.value === 0) && counter.io.working
     io.working := counter.io.working
 }
+/*
+  Unpacks a Stream into a layout by bit position.
+ */
+object StreamUnpacker {
+  def apply[T <: Data](input: Stream[T], layout: List[(Data, Int)]): StreamUnpacker[T] = {
+    require(layout.nonEmpty)
+    val map_layout = layout.toMapLinked()
+    val unpacker = new StreamUnpacker[T](input.payloadType, map_layout)
+    unpacker.io.input << input
+    layout.map(_._1).zip(unpacker.io.outputs) foreach { case(data, comp_out) =>
+      data.assignFrom(comp_out)
+    }
+    unpacker
+  }
+}
+
+class StreamUnpacker[T <: Data](
+  dataType: HardType[T],
+  layout: mutable.LinkedHashMap[Data, Int]
+) extends Area {
+
+  require(layout.nonEmpty)
+
+  private val dataOut = layout.keys.toList
+  // Convert start bits to word indexes
+  private val dataWords = layout.values.map {bit => Math.floor(bit / dataType.getBitsWidth).toInt }
+  private val bitOffset = layout.values.map(_ % dataType.getBitsWidth).toList
+
+  val io = new Bundle {
+    val input   = Stream(dataType)
+    val outputs = Vec(dataOut.map(_.clone()))
+    val dones   = Bits(layout.keys.size bits)
+    val allDone = Bool()
+  }
+
+  private val outputs = Reg(Vec(dataOut.map(_.clone())))
+  private val dones   = Reg(Bits(dataOut.size bits)) init B(0)
+
+  private val counter = Counter(dataWords.max+1)
+
+  // Convert the Stream to a Flow. This component does not apply backpressure
+  private val inFlow = io.input.toFlow
+
+  // Clear Dones
+  dataWords.foreach {
+    dones(_).clear()
+  }
+
+  when(inFlow.valid) {
+    counter.increment()
+
+    // Latch the Data for the current counter
+    dataWords.zipWithIndex.foreach { case(i, word) =>
+      when(counter.value === word) {
+        outputs(i).assignFromBits(inFlow.payload.asBits(bitOffset(i), outputs(i).getBitsWidth bits))
+      }
+    }
+
+    // Generate Dones when the Data's word appears
+    dataWords.zipWithIndex.foreach { case(ind, word) =>
+      dones(ind).setWhen(counter.value === word)
+    }
+  }
+
+  io.outputs := outputs
+  io.dones   := dones
+  io.allDone := dones(dones.getBitsWidth - 1)
+}
+
+object StreamPacker {
+  def apply[T <: Data](output: Stream[T], layout: List[(Data, Int)]): StreamPacker[T] = {
+    val map_layout = layout.toMapLinked()
+    val packer = new StreamPacker[T](output.payloadType, map_layout)
+    packer.io.output >> output
+    layout.map(_._1).zip(packer.io.inputs) foreach { case (data, comp_in) =>
+      comp_in.assignFrom(data)
+    }
+    packer
+  }
+
+  implicit class PackedBundleEnrich[B <: PackedBundle](packedBundle : B) {
+    def toStream(bitWidth : BitCount): Stream[Bits] = {
+      val outStream = Stream(Bits(bitWidth))
+
+      outStream
+    }
+  }
+}
+
+class StreamPacker[T <: Data](
+  dataType: HardType[T],
+  layout: mutable.LinkedHashMap[Data, Int]
+) extends Area {
+
+  require(layout.nonEmpty)
+
+  private val dataIn = layout.keys.toList
+  // Convert start bits to word indexes
+  private val dataWords = layout.values.map {bit => Math.floor(bit / dataType.getBitsWidth).toInt }
+  private val bitOffset = layout.values.map(_ % dataType.getBitsWidth).toList
