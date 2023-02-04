@@ -1960,7 +1960,7 @@ class StreamTransactionExtender[T <: Data, T2 <: Data](
 /*
   Unpacks a Stream into a layout by bit position.
  */
-object StreamUnpacker {
+/*object StreamUnpacker {
   def apply[T <: Data](input: Stream[T], layout: List[(Data, Int)]): StreamUnpacker[T] = {
     require(layout.nonEmpty)
     val map_layout = layout.toMapLinked()
@@ -1971,9 +1971,9 @@ object StreamUnpacker {
     }
     unpacker
   }
-}
+}*/
 
-class StreamUnpacker[T <: Data](
+/*class StreamUnpacker[T <: Data](
   dataType: HardType[T],
   layout: mutable.LinkedHashMap[Data, Int]
 ) extends Area {
@@ -2024,9 +2024,9 @@ class StreamUnpacker[T <: Data](
   io.outputs := outputs
   io.dones   := dones
   io.allDone := dones(dones.getBitsWidth - 1)
-}
+}*/
 
-object StreamPacker {
+/*object StreamPacker {
   def apply[T <: Data](output: Stream[T], layout: List[(Data, Int)]): StreamPacker[T] = {
     val map_layout = layout.toMapLinked()
     val packer = new StreamPacker[T](output.payloadType, map_layout)
@@ -2044,9 +2044,9 @@ object StreamPacker {
       outStream
     }
   }
-}
+}*/
 
-class StreamPacker[T <: Data](
+/*class StreamPacker[T <: Data](
   dataType: HardType[T],
   layout: mutable.LinkedHashMap[Data, Int]
 ) extends Area {
@@ -2056,4 +2056,4 @@ class StreamPacker[T <: Data](
   private val dataIn = layout.keys.toList
   // Convert start bits to word indexes
   private val dataWords = layout.values.map {bit => Math.floor(bit / dataType.getBitsWidth).toInt }
-  private val bitOffset = layout.values.map(_ % dataType.getBitsWidth).toList
+  private val bitOffset = layout.values.map(_ % dataType.getBitsWidth).toList*/

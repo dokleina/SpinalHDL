@@ -2,9 +2,7 @@ package spinal.lib
 
 import spinal.core._
 
-import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.collection.mutable.Map
 
 abstract class IMappingBuilder {
   def addData(d : Data): Unit
@@ -14,28 +12,6 @@ abstract class IMappingBuilder {
 }
 
 sealed trait TagPackableBundle extends SpinalTag
-
-
-class PackableBundle extends Bundle {
-  override def asBits: Bits = ???
-
-  override def assignFromBits(bits: Bits, hi: Int, lo: Int): Unit = ???
-
-  override def assignFromBits(bits: Bits): Unit = assignFromBits(bits, bits.getBitsWidth, 0)
-
-  def valCallbackTaggedData(ref: Data, tags: Seq[TagPackableBundle]): Unit = ???
-
-  override def valCallbackRec(ref: Any, name: String): Unit = {
-    super.valCallbackRec(ref, name)
-
-    // Process the data
-    ref match {
-      case d: Data =>
-        valCallbackTaggedData(d, d.getTags() collect { case e: TagPackableBundle => e } toSeq)
-      case _ =>
-    }
-  }
-}
 
 /**
   * Similar to Bundle but with bit packing capabilities.
@@ -55,19 +31,16 @@ class PackableBundle extends Bundle {
   * }}}
   *
   */
-class PackedBitBundle extends PackableBundle {
+class PackedBundle extends Bundle {
 
-  class TagBitPackExact(val range: Range, val endianness: Endianness) extends SpinalTag {
-    // Only one TagBitPackExact per element
-    override def allowMultipleInstance: Boolean = false
-  }
+  class TagBitPackExact(val range: Range, val endianness: Endianness) extends SpinalTag
 
   /**
     * Builds and caches the range mappings for PackedBitBundle's elements.
     * Tracks the width required for all mappings.
     * Does not check for overlap of elements.
     */
-  private class MappingBuilder extends IMappingBuilder {
+  protected class MappingBuilder extends IMappingBuilder {
     var lastPos = 0
     var highBit = 0
 
@@ -84,12 +57,14 @@ class PackedBitBundle extends PackableBundle {
 
       // Update the bit width
       highBit = highBit.max(r.high)
+
+      mapping.append(r -> d)
     }
 
     def width = highBit + 1
   }
 
-  private val mapBuilder = new MappingBuilder()
+  val mapBuilder : IMappingBuilder = new MappingBuilder()
 
   /**
     * Gets the mappings of Range to Data for this PackedBundle
@@ -168,138 +143,73 @@ class PackedBitBundle extends PackableBundle {
     def packTo(pos: Int): T = {
       t.pack(pos downto pos - t.getBitsWidth + 1)
     }
-  }
-
-  override def valCallbackTaggedData(d : Data, tags: Seq[TagPackableBundle]): Unit = {
-    mapBuilder.addData(d)
-  }
-
-}
-
-class PackedBundle extends PackedBitBundle
-
-class PackedWordBundle(wordWidth : BitCount) extends PackableBundle {
-
-  /**
-    * Holds a Data's associated slice into a word.
-    *
-    * Word association is assigned with `TagWordIndex`.
-    * @param range Word bit slive for the tagged Data
-    */
-  class TagWordSlice(val range: Range) extends TagPackableBundle {
-    // Only one TagBitPackExact per element
-    override def allowMultipleInstance: Boolean = false
-  }
-
-  /**
-    * Holds a Data's associated word index.
-    * @param index Word index for the tagged Data
-    */
-  class TagWordIndex(val index: Int) extends TagPackableBundle {
-    override def allowMultipleInstance: Boolean = false
-  }
-
-  /**
-    * Holds one of a Data's word index -> slice mappings.
-    * Multiple tags may be applied if the Data is mapped across multiple words.
-    * @param index Word index for the tagged Data
-    * @param range Word bit slice for the tagged Data
-    */
-  class TagWordMultiMap(val index : Int, val range : Range) extends TagPackableBundle
-
-  def wordWidth : BitCount = ???
-
-  /**
-    * Holds a reference Data and it's word-mapped bit range. Also holds an optional range specifying which bits
-    * of Data are being mapped.
-    * @param ref Data reference
-    * @param wordRnage Range of bits in a word that the Data is mapped into
-    * @param dataRange Optional range of bits of the Data that are being mapped
-    */
-  private case class DataWordMap(ref : Data, wordRange : Range, dataRange : Option[Range])
-
-  /**
-    * Builds and caches word indice and range mappings for PackedWordBundle.
-    * Tracks required width for all mappings, rounded up.
-    *
-    * Does not check for overlap of elements.
-    */
-  private class WordMappingBuilder(wordWidth : Int) {
-    var highWord = 0
-
-    val mapping = mutable.Map[Int, ArrayBuffer[DataWordMap]]()
-
-    // Map of word index -> [Data, Range (in word), Range (in data)]
-    val words   = mutable.Map[Int, ArrayBuffer[(Data, Range, Range)]]()
-
-    def addData(d: Data, tags: Seq[TagPackableBundle]): Unit = {
-      // Further filter the tags
-      val mapTags = tags collect { case e: TagWordMultiMap => e }
-
-      if(mapTags.isEmpty) {
-        // Find word tag or assume the latest word
-        val wordIdx = tags find {
-          _.isInstanceOf[TagWordIndex]
-        } match {
-          case Some(t: TagWordIndex) => t.index
-          case None => highWord
-        }
-
-        // Find slice tag or try to map it in the unused bits of the word
-        val slice = tags find {
-          _.isInstanceOf[TagWordSlice]
-        } match {
-          case Some(t: TagWordSlice) => t.range
-          case None =>
-            val wordBuf = getWord(wordIdx)
-            // Find the highest unused bit in the word
-            val highBit = wordBuf.map { e =>
-              // Middle element is the range in the word
-              //   and we want the highest bit
-              e._2.high
-            }.max
-
-            if (highBit >= wordWidth-1) {
-              // No more bits in this word
-              SpinalError(s"PackedWordBundle Slice Auto-resolve error: Cannot map Data ${d.name} in word ${wordIdx}")
-            }
-
-            if ((highBit + d.getBitsWidth) > wordWidth) {
-              // Will run out of bits, so only partially map the data
-              SpinalWarning(s"PackedWordBundle Slice Auto-resolve warning: Cannot fully map Data ${d.name} in word ${wordIdx}")
-            }
-
-            // Make a new slice for this data
-            // Start at the highest bit and go until either the word width (clip) or the full data's size
-            val newSlice = (highBit + d.getBitsWidth).min(wordWidth)-1 downto highBit
-        }
-      }
-    }
-
-    protected def getWord(index : Int) = words.getOrElseUpdate(index, ArrayBuffer[(Data, Range, Range)])
-  }
-
-  implicit class WordDefnEnrich[T <: Data](t: T) {
-    def inWord(index : Int): T = {
-      // ToDo: Tag with word index
-      t
-    }
-
-    def pack(range : Range): T = {
-      // ToDo: Tag with slice range
-      t
-    }
-
-    def inWords(wordSliceMap : Seq[(Int, Range)]): T = {
-      // ToDo: Tag with multiword slice
-      t
-    }
 
     /**
-      * Short-hand form of `inWords`.
-      * @param wordSlices - Word index to range slice pairs
-      * @return self
+      * Packs a single bit at the bit position
+      *
+      * @param pos
+      * @return
       */
-    def inWords(wordSlices : (Int, Range)*): T = inWords(wordSlices)
+    def at(pos: Int): T = {
+      t.pack(pos downto pos)
+    }
+  }
+
+  override def valCallbackRec(ref: Any, name: String): Unit = {
+    super.valCallbackRec(ref, name)
+
+    // Process the data
+    ref match {
+      case d: Data =>
+        mapBuilder.addData(d)
+      case _ =>
+    }
+  }
+}
+
+/**
+  * An enhanced form of PackedBundle with Word-centric packing.
+  * Offers all the same implicit packing assignment functions, but applies packing to an assigned word.
+  * - inWord(WordIndex) - Indicates which word to pack into. Must be used after a pack assigment. If no pack range was given then the entire data length will be assumed. Ranges that exceed the word will wrap into subsequent words.
+  *
+  * Like PackedBundle, providing no pack or word assignments will place data immediately after the last.
+  *
+  * @example {{{
+  *     val wordPacked = PackedWordBundle(8 bits) {
+  *       val aNumber = UInt(8 bits).word(0) // Bits 7 downto 0
+  *       val bNumber = UInt(8 bits).pack(0 to 7).word(1) // Bits 8 to 15
+  *       val large   = Bits(18 bits).word(2) // Bits 33 downto 16
+  *       val flag    = Bool() // Bit 34
+  * }}}
+  * @param wordWidth Width of a word, as BitCount
+  */
+class PackedWordBundle(wordWidth : BitCount) extends PackedBundle {
+
+  implicit class WordEnrich[T <: Data](t: T) {
+
+    def inWord(index : Int) = {
+      val bitPackExact = t.getTag(classOf[TagBitPackExact])
+
+      if (bitPackExact.isDefined) {
+        // Update the BitPackExact if it exists on the Data
+        t.removeTag(bitPackExact.get)
+        val oldRange = bitPackExact.get.range
+        val basePos = index * wordWidth.value
+
+        val newRange = {
+          if (oldRange.step > 0) {
+            oldRange.low + basePos to oldRange.high + basePos
+          } else {
+            oldRange.high + basePos downto oldRange.low + basePos
+          }
+        }
+
+        t.pack(newRange)
+      } else {
+        // Add the full range of the Data starting at the given word index
+        val basePos = index * wordWidth.value
+        t.packFrom(basePos)
+      }
+    }
   }
 }

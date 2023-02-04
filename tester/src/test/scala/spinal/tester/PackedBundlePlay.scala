@@ -13,42 +13,41 @@ object PackedBundlePlay {
     val ignore = Bool()
   }
 
-  val TestWordBundle = new PackedWordBundle {
-    val r = UInt(5 bits) pack(5 downto 0) inWord(0)
-    val g = UInt(6 bits) inWord(1)
-    val b = UInt(5 bits) inWord(2)
-    val a = UInt(16 bits) inWords(
-      3 -> (7 downto 0),
-      4 -> (15 downto 8)
-    )
+  case class TestWordBundle() extends PackedWordBundle(8 bits) {
+    val r = UInt(5 bits) pack(4 downto 0) inWord(0)
+    val g = UInt(6 bits) pack(5 downto 0) inWord(1)
+    val b = UInt(5 bits) pack(4 downto 0) inWord(2)
+    val a = UInt(16 bits) inWord(3)
+    val invert = Bool() at 0 inWord 5
+    val ignore = Bool() at 1 inWord 5
   }
 
-  class TestBundlePacked extends PackedWordBundle(16 bits) {
-    val r = UInt(5 bits) word 0
-    val g = UInt(6 bits) word 1
-    val b = UInt(5 bits) word 2
-    val a = UInt(16 bits) words(
-      3 -> (7 downto 0),
-      4 -> (15 downto 8)
-    )
-    val c = UInt(5 bits) word 0
-    val invert = Bool() at 0 word 5
-    val ignore = Bool() at 1 word 5
-  }
+//  class TestBundlePacked extends PackedWordBundle(16 bits) {
+//    val r = UInt(5 bits) word 0
+//    val g = UInt(6 bits) word 1
+//    val b = UInt(5 bits) word 2
+//    val a = UInt(16 bits) words(
+//      3 -> (7 downto 0),
+//      4 -> (15 downto 8)
+//    )
+//    val c = UInt(5 bits) word 0
+//    val invert = Bool() at 0 word 5
+//    val ignore = Bool() at 1 word 5
+//  }
 
-  class TestFieldBundle extends Packed(16 bits) {
-    val r = (5 downto 0) word 0
-    val g = (6 downto 0) word 1
-    val b = (5 downto 0) word 2
-  }
+//  class TestFieldBundle extends Packed(16 bits) {
+//    val r = (5 downto 0) word 0
+//    val g = (6 downto 0) word 1
+//    val b = (5 downto 0) word 2
+//  }
 
   class TopLevel extends Component {
     var io = new Bundle {
       val inData = in(new TestBundle())
-      val outData = out(new TestBundle())
+      val outData = out(new TestWordBundle())
     }
 
-    io.outData := RegNext(io.inData)
+    io.outData.assignAllByName(io.inData)
   }
 
 
