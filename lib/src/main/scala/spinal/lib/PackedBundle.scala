@@ -4,15 +4,6 @@ import spinal.core._
 
 import scala.collection.mutable.ArrayBuffer
 
-abstract class IMappingBuilder {
-  def addData(d : Data): Unit
-  def width: Int
-
-  def mapping: Seq[(Range, Data)]
-}
-
-sealed trait TagPackableBundle extends SpinalTag
-
 /**
   * Similar to Bundle but with bit packing capabilities.
   * Use pack implicit functions to assign fields to bit locations
@@ -33,25 +24,42 @@ sealed trait TagPackableBundle extends SpinalTag
   */
 class PackedBundle extends Bundle {
 
-  class TagBitPackExact(val range: Range, val endianness: Endianness) extends SpinalTag
+  class TagBitPackExact(val range: Range) extends SpinalTag
 
   /**
     * Builds and caches the range mappings for PackedBitBundle's elements.
     * Tracks the width required for all mappings.
     * Does not check for overlap of elements.
     */
-  protected class MappingBuilder extends IMappingBuilder {
-    var lastPos = 0
-    var highBit = 0
+  private class MappingBuilder {
+    private var lastPos = 0
+    private var highBit = 0
 
     val mapping = ArrayBuffer[(Range, Data)]()
 
     def addData(d : Data): Unit = {
       val r = d.getTag(classOf[TagBitPackExact]) match {
         case t: Some[TagBitPackExact] =>
-          t.get.range
+          val origRange = t.get.range
+
+          // Check if the tagged range is too large for the data
+          if(origRange.size <= d.getBitsWidth) {
+            origRange
+          } else {
+            // Need to truncate the tagged range to the size of the actual data
+            val newSize = origRange.size.min(d.getBitsWidth)
+
+            // Retain the range directionality
+            if (origRange.step > 0) {
+              (origRange.max - newSize - 1) to origRange.max
+            } else {
+              origRange.max downto (origRange.max - newSize - 1)
+            }
+          }
+
         case None =>
-          (lastPos+d.getBitsWidth-1) downto (lastPos)
+          // Assume the full range of the data with the MSB as the highest bit
+          (lastPos + d.getBitsWidth - 1) downto (lastPos)
       }
       lastPos = r.high
 
@@ -64,7 +72,7 @@ class PackedBundle extends Bundle {
     def width = highBit + 1
   }
 
-  val mapBuilder : IMappingBuilder = new MappingBuilder()
+  private val mapBuilder = new MappingBuilder()
 
   /**
     * Gets the mappings of Range to Data for this PackedBundle
@@ -76,15 +84,12 @@ class PackedBundle extends Bundle {
     val maxWidth = mappings.map(_._1.high).max + 1
     val packed = B(0, maxWidth bit)
     for ((range, data) <- mappings) {
-      val endianness: Endianness = data.getTag(classOf[TagBitPackExact]) match {
-        case t: Some[TagBitPackExact] => t.get.endianness
-        case _ => LITTLE
-      }
-      endianness match {
-        case LITTLE =>
-          packed(range) := data.asBits.takeLow(range.size.min(data.getBitsWidth)).resize(range.size)
-        case BIG =>
-          packed(range) := data.asBits.takeHigh(range.size.min(data.getBitsWidth)).resizeLeft(range.size)
+      if(range.step > 0) {
+        // "Little endian" -- ascending range
+        packed(range) := data.asBits.takeLow(range.size.min(data.getBitsWidth)).resize(range.size)
+      } else {
+        // "Big endian" -- descending range
+        packed(range) := data.asBits.takeHigh(range.size.min(data.getBitsWidth)).resizeLeft(range.size)
       }
     }
     packed
@@ -94,19 +99,16 @@ class PackedBundle extends Bundle {
 
   override def assignFromBits(bits: Bits, hi: Int, lo: Int): Unit = {
     for((elRange, el) <- mappings) {
-      val endianness: Endianness = el.getTag(classOf[TagBitPackExact]) match {
-        case t: Some[TagBitPackExact] => t.get.endianness
-        case _ => LITTLE
-      }
+      // Check if the assignment range falls within the current data's range
+      // This happens when the data range's high or low falls within the assignment's hi and lo
+      // ...or whenever lo isn't past the data range's high and hi isn't below the data range's low
       if (!(lo >= elRange.high || hi < elRange.low)) {
-        val diff = (elRange.size - el.getBitsWidth).max(0)
-        endianness match {
-          case LITTLE =>
-            val boundedBitsRange = hi.min(elRange.high-diff) downto lo.max(elRange.low)
-            el.assignFromBits(bits(boundedBitsRange).resize(el.getBitsWidth))
-          case BIG =>
-            val boundedBitsRange = hi.min(elRange.high) downto lo.max(elRange.low+diff)
-            el.assignFromBits(bits(boundedBitsRange).resizeLeft(el.getBitsWidth))
+        if (elRange.step > 0) {
+          // "Little endian" -- ascending range
+          el.assignFromBits(bits(elRange).resize(el.getBitsWidth))
+        } else {
+          // "Big endian" -- descending range
+          el.assignFromBits(bits(elRange).resizeLeft(el.getBitsWidth))
         }
       }
     }
@@ -116,13 +118,16 @@ class PackedBundle extends Bundle {
 
   implicit class DataPositionEnrich[T <: Data](t: T) {
     /**
-      * Place the data at the given range. Extra bits will be lost (unassigned or read) if the data does not fit with the range.
+      * Place the data at the given range. Extra bits will be lost (unassigned or read) if the data does not fit with
+      * the range.
+      *
+      * Note: The directionality of the range (either ascending or descending) determines which bits will be dropped
+      * if `range` is larger than the data width, or which bits will be zero if `range` is smaller than the data width.
       * @param range Range to place the data
-      * @param endianness Bit direction to align data within the range
       * @return Self
       */
-    def pack(range: Range, endianness: Endianness = LITTLE): T = {
-      t.addTag(new TagBitPackExact(range, endianness))
+    def pack(range: Range): T = {
+      t.addTag(new TagBitPackExact(range))
       t
     }
 
@@ -142,16 +147,6 @@ class PackedBundle extends Bundle {
       */
     def packTo(pos: Int): T = {
       t.pack(pos downto pos - t.getBitsWidth + 1)
-    }
-
-    /**
-      * Packs a single bit at the bit position
-      *
-      * @param pos
-      * @return
-      */
-    def at(pos: Int): T = {
-      t.pack(pos downto pos)
     }
   }
 
@@ -192,10 +187,14 @@ class PackedWordBundle(wordWidth : BitCount) extends PackedBundle {
 
       if (bitPackExact.isDefined) {
         // Update the BitPackExact if it exists on the Data
+
+        // Remove the old tag as it's bit range was in reference to a word's bits
         t.removeTag(bitPackExact.get)
+
         val oldRange = bitPackExact.get.range
         val basePos = index * wordWidth.value
 
+        // Build the new range from the old and the word's base position
         val newRange = {
           if (oldRange.step > 0) {
             oldRange.low + basePos to oldRange.high + basePos
