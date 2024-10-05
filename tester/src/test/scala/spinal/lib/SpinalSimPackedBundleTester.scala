@@ -9,6 +9,8 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
     SimConfig
       .compile(new Component {
         val packedBundle = new PackedBundle {
+          setDefaultPackValue(0)
+
           val a = Bits(3 bit) // 0 to 2
           val b = Bits(3 bit).packFrom(4) // 4 to 6
           val c = Bits(3 bit).packTo(9) // 7 to 9
@@ -25,10 +27,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val e = in(Bits(3 bit))
           val f = in(Bits(6 bit))
           val g = in(Bits(6 bit))
-          val packed = out(packedBundle.packed.clone)
+          val packed = out(packedBundle.asBits.clone)
         }
 
-        io.packed := RegNext(packedBundle.packed)
+        io.packed := RegNext(packedBundle.asBits)
         packedBundle.a := io.a
         packedBundle.b := io.b
         packedBundle.c := io.c
@@ -100,10 +102,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val e = out(Bits(3 bit))
           val f = out(Bits(6 bit))
           val g = out(Bits(6 bit))
-          val packed = in(packedBundle.packed.clone)
+          val packed = in(packedBundle.asBits.clone)
         }
 
-        packedBundle.unpack(RegNext(io.packed))
+        packedBundle.assignFromBits(RegNext(io.packed))
         io.a := packedBundle.a
         io.b := packedBundle.b
         io.c := packedBundle.c
@@ -157,6 +159,8 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
     SimConfig.withWave
       .compile(new Component {
         val packedBundle = new PackedBundle {
+          setDefaultPackValue(0)
+
           val a = Bits(3 bit) // 0 to 2
           val b = Bits(3 bit).packFrom(4) // 4 to 6
           val c = Bits(3 bit).packTo(9) // 7 to 9
@@ -173,10 +177,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val e = in(Bits(3 bit))
           val f = in(Bits(6 bit))
           val g = in(Bits(6 bit))
-          val packed = out(packedBundle.packed.clone)
+          val packed = out(packedBundle.asBits.clone)
         }
 
-        io.packed := RegNext(packedBundle.packed)
+        io.packed := RegNext(packedBundle.asBits)
         packedBundle.a := io.a
         packedBundle.b := io.b
         packedBundle.c := io.c
@@ -248,10 +252,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val e = out(Bits(3 bit))
           val f = out(Bits(6 bit))
           val g = out(Bits(6 bit))
-          val packed = in(packedBundle.packed.clone)
+          val packed = in(packedBundle.asBits.clone)
         }
 
-        packedBundle.unpack(RegNext(io.packed))
+        packedBundle.assignFromBits(RegNext(io.packed))
         io.a := packedBundle.a
         io.b := packedBundle.b
         io.c := packedBundle.c
@@ -305,6 +309,8 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
     SimConfig
       .compile(new Component {
         val packedBundle = new PackedBundle {
+          setDefaultPackValue(0)
+
           val a = Bits(4 bits) // 0 to 3
           val b = Bits(2 bits).packFrom(8) // 8 to 9
           val c = Bits(4 bits) // 10 to 13
@@ -316,10 +322,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val b = in(Bits(2 bits))
           val c = in(Bits(4 bits))
           val d = in(Bits(2 bits))
-          val packed = out(Bits(packedBundle.getPackedWidth bits))
+          val packed = out(Bits(packedBundle.getBitsWidth bits))
         }
 
-        io.packed := RegNext(packedBundle.packed)
+        io.packed := RegNext(packedBundle.asBits)
         packedBundle.a := io.a
         packedBundle.b := io.b
         packedBundle.c := io.c
@@ -374,10 +380,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           val b = out(Bits(2 bit))
           val c = out(Bits(4 bit))
           val d = out(Bits(2 bit))
-          val packed = in(Bits(packedBundle.getPackedWidth bits))
+          val packed = in(Bits(packedBundle.getBitsWidth bits))
         }
 
-        packedBundle.unpack(RegNext(io.packed))
+        packedBundle.assignFromBits(RegNext(io.packed))
         io.a := packedBundle.a
         io.b := packedBundle.b
         io.c := packedBundle.c
@@ -437,6 +443,8 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
     SimConfig
       .compile(new Component {
         val packedBundle = new PackedBundle {
+          setDefaultPackValue(0)
+
           val a = Bits(4 bits) // Bits 0 1 2 3
           skipOver(4 bits)
           val b = Bits(8 bits) // Bits 8 9 10 11 12 13 14 15
@@ -445,10 +453,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
         val io = new Bundle {
           val a = in(Bits(4 bit))
           val b = in(Bits(8 bit))
-          val packed = out(Bits(packedBundle.getPackedWidth bits))
+          val packed = out(Bits(packedBundle.getBitsWidth bits))
         }
 
-        io.packed := RegNext(packedBundle.packed)
+        io.packed := RegNext(packedBundle.asBits)
         packedBundle.a := io.a
         packedBundle.b := io.b
       })
@@ -492,10 +500,10 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
         val io = new Bundle {
           val a = out(Bits(4 bit))
           val b = out(Bits(8 bit))
-          val packed = in(Bits(packedBundle.getPackedWidth bits))
+          val packed = in(Bits(packedBundle.getBitsWidth bits))
         }
 
-        packedBundle.unpack(RegNext(io.packed))
+        packedBundle.assignFromBits(RegNext(io.packed))
         io.a := packedBundle.a
         io.b := packedBundle.b
       })

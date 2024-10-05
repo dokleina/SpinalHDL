@@ -22,6 +22,9 @@ import scala.collection.mutable.ArrayBuffer
   */
 class PackedBundle extends Bundle {
 
+  private var defaultValue: Option[BigInt] = None
+  def setDefaultPackValue(newValue : BigInt) = this.defaultValue = Some(newValue)
+
   class TagBitPackExact(val range: Range) extends SpinalTag
 
   /** Builds and caches the range mappings for PackedBundle's elements.
@@ -75,27 +78,24 @@ class PackedBundle extends Bundle {
     */
   def mappings = mapBuilder.mapping
 
-  @deprecated("Use `asBits` instead of `pack`.", "???")
+  @deprecated("Use `asBits` instead of `packed`.", "???")
   def packed: Bits = this.asBits
 
   override def asBits: Bits = {
     val maxWidth = mappings.map(_._1.high).max + 1
-    val packed = B(0, maxWidth bit).allowOverride()
+    val packed = defaultValue match {
+      case Some(v) =>
+        B(v, maxWidth bit).allowOverride()
+      case None =>
+        Bits(maxWidth bit).assignDontCare()
+    }
     for ((range, data) <- mappings) {
       if (range.step > 0) {
         // "Little endian" -- ascending range
-        val subBits = data match {
-          case subPacked: PackedBundle => subPacked.packed
-          case _                       => data.asBits
-        }
-        packed(range) := subBits.takeLow(range.size.min(data.getBitsWidth)).resize(range.size)
+        packed(range) := data.asBits.takeLow(range.size.min(data.getBitsWidth)).resize(range.size)
       } else {
         // "Big endian" -- descending range
-        val subBits = data match {
-          case subPacked: PackedBundle => subPacked.packed
-          case _                       => data.asBits
-        }
-        packed(range) := subBits.takeHigh(range.size.min(data.getBitsWidth)).resizeLeft(range.size)
+        packed(range) := data.asBits.takeHigh(range.size.min(data.getBitsWidth)).resizeLeft(range.size)
       }
     }
     packed
