@@ -2,6 +2,7 @@ package spinal.lib
 
 import spinal.core._
 import spinal.core.sim._
+import spinal.lib.sim.PackedBundle._
 import spinal.tester.SpinalAnyFunSuite
 
 class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
@@ -40,18 +41,6 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt, e: BigInt, f: BigInt, g: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 4
-          res += c << 7
-          res += d << 10
-          res += e << 17
-          res += (f & 0x1f) << 20
-          res += (g >> 1) << 25
-          res
-        }
-
         for (i <- 0 to 29) {
           val n = 1 << i
           dut.io.a #= n & 0x7
@@ -62,26 +51,25 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           dut.io.f #= (n >> 20) & 0x3f
           dut.io.g #= (n >> 25) & 0x3f
           dut.clockDomain.waitFallingEdge()
-          val packedCalc = pack(
-            dut.io.a.toBigInt,
-            dut.io.b.toBigInt,
-            dut.io.c.toBigInt,
-            dut.io.d.toBigInt,
-            dut.io.e.toBigInt,
-            dut.io.f.toBigInt,
-            dut.io.g.toBigInt
+          val packedCalc = dut.packedBundle.BigIntsPacked(
+              dut.io.a.toBigInt,
+              dut.io.b.toBigInt,
+              dut.io.c.toBigInt,
+              dut.io.d.toBigInt,
+              dut.io.e.toBigInt,
+              dut.io.f.toBigInt,
+              dut.io.g.toBigInt
           )
-
           assert(
             dut.io.packed.toBigInt == packedCalc,
-            s"0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
+            s"$i: 0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
           )
         }
       })
   }
 
   test("unpack legacy") {
-    SimConfig
+    SimConfig.withWave
       .compile(new Component {
         val packedBundle = new PackedBundle {
           val a = Bits(3 bit) // 0 to 2
@@ -115,22 +103,11 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt, e: BigInt, f: BigInt, g: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 4
-          res += c << 7
-          res += d << 10
-          res += e << 17
-          res += (f & 0x1f) << 20
-          res += (g >> 1) << 25
-          res
-        }
-
         for (i <- 0 to 29) {
           dut.io.packed #= 1 << i
           dut.clockDomain.waitFallingEdge()
-          var packedCalc = pack(
+          val unpackedCalc = dut.packedBundle.BigIntUnpacked(dut.io.packed.toBigInt)
+          val unpackedReal = Seq(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt,
             dut.io.c.toBigInt,
@@ -139,15 +116,12 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
             dut.io.f.toBigInt,
             dut.io.g.toBigInt
           )
-          // Add the ignored bits back in
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 3)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 13)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 14)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 15)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 16)
           assert(
-            dut.io.packed.toBigInt == packedCalc,
-            s"0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
+            unpackedReal == unpackedCalc,
+            "%s =!= %s\n".format(
+              unpackedReal.map(_.toString(16)).mkString("0x",", 0x",""),
+              unpackedCalc.map(_.toString(16)).mkString("0x",", 0x","")
+            )
           )
         }
       })
@@ -188,18 +162,6 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt, e: BigInt, f: BigInt, g: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 4
-          res += c << 7
-          res += d << 10
-          res += e << 17
-          res += (f & 0x1f) << 20
-          res += (g >> 1) << 25
-          res
-        }
-
         for (i <- 0 to 29) {
           val n = 1 << i
           dut.io.a #= n & 0x7
@@ -210,7 +172,7 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           dut.io.f #= (n >> 20) & 0x3f
           dut.io.g #= (n >> 25) & 0x3f
           dut.clockDomain.waitFallingEdge()
-          val packedCalc = pack(
+          val packedCalc = dut.packedBundle.BigIntsPacked(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt,
             dut.io.c.toBigInt,
@@ -263,22 +225,11 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt, e: BigInt, f: BigInt, g: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 4
-          res += c << 7
-          res += d << 10
-          res += e << 17
-          res += (f & 0x1f) << 20
-          res += (g >> 1) << 25
-          res
-        }
-
         for (i <- 0 to 29) {
           dut.io.packed #= 1 << i
           dut.clockDomain.waitFallingEdge()
-          var packedCalc = pack(
+          val unpackedCalc = dut.packedBundle.BigIntUnpacked(dut.io.packed.toBigInt)
+          val unpackedReal = Seq(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt,
             dut.io.c.toBigInt,
@@ -287,15 +238,12 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
             dut.io.f.toBigInt,
             dut.io.g.toBigInt
           )
-          // Add the ignored bits back in
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 3)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 13)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 14)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 15)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 16)
           assert(
-            dut.io.packed.toBigInt == packedCalc,
-            s"0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
+            unpackedReal == unpackedCalc,
+            "%s =!= %s\n".format(
+              unpackedReal.map(_.toString(16)).mkString("0x",", 0x",""),
+              unpackedCalc.map(_.toString(16)).mkString("0x",", 0x","")
+            )
           )
         }
       })
@@ -328,15 +276,6 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 8
-          res += c << 10
-          res += d << 5
-          res
-        }
-
         for (i <- 0 to 13) {
           val n = 1 << i
           dut.io.a #= n & 0xF
@@ -344,7 +283,7 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
           dut.io.c #= (n >> 10) & 0xF
           dut.io.d #= (n >> 5) & 0x3
           dut.clockDomain.waitFallingEdge()
-          val packedCalc = pack(
+          val packedCalc = dut.packedBundle.BigIntsPacked(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt,
             dut.io.c.toBigInt,
@@ -386,30 +325,23 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt, c: BigInt, d: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 8
-          res += c << 10
-          res += d << 5
-          res
-        }
-
         for (i <- 0 to 13) {
           dut.io.packed #= 1 << i
           dut.clockDomain.waitFallingEdge()
-          var packedCalc = pack(
+          val unpackedCalc = dut.packedBundle.BigIntUnpacked(dut.io.packed.toBigInt)
+          val unpackedReal = Seq(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt,
             dut.io.c.toBigInt,
             dut.io.d.toBigInt
           )
-          // Add the ignored bits back in
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 4)
-          packedCalc |= (dut.io.packed.toBigInt & 1 << 7)
           assert(
-            dut.io.packed.toBigInt == packedCalc,
-            s"Bit ${i}: 0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
+            unpackedReal == unpackedCalc,
+            "Bit %d: %s =!= %s\n".format(
+              i,
+              unpackedReal.map(_.toString(16)).mkString("0x",", 0x",""),
+              unpackedCalc.map(_.toString(16)).mkString("0x",", 0x","")
+            )
           )
         }
       })
@@ -455,19 +387,12 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 8
-          res
-        }
-
         for (i <- 0 to 15) {
           val n = 1 << i
           dut.io.a #= n & 0xF
           dut.io.b #= (n >> 8) & 0xFF
           dut.clockDomain.waitFallingEdge()
-          val packedCalc = pack(
+          val packedCalc = dut.packedBundle.BigIntsPacked(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt
           )
@@ -502,26 +427,21 @@ class SpinalSimPackedBundleTester extends SpinalAnyFunSuite {
       .doSim(dut => {
         dut.clockDomain.forkStimulus(10)
 
-        def pack(a: BigInt, b: BigInt): BigInt = {
-          var res = BigInt(0)
-          res += a
-          res += b << 8
-          res
-        }
-
         for (i <- 0 to 15) {
           dut.io.packed #= 1 << i
           dut.clockDomain.waitFallingEdge()
-          var packedCalc = pack(
+          val unpackedCalc = dut.packedBundle.BigIntUnpacked(dut.io.packed.toBigInt)
+          val unpackedReal = Seq(
             dut.io.a.toBigInt,
             dut.io.b.toBigInt
           )
-          // Add the ignored bits back in
-          packedCalc |= (dut.io.packed.toBigInt & 0xF << 4)
-
           assert(
-            dut.io.packed.toBigInt == packedCalc,
-            s"Bit ${i}: 0x${dut.io.packed.toBigInt.toString(16)} =!= 0x${packedCalc.toString(16)}\n"
+            unpackedReal == unpackedCalc,
+            "Bit %d: %s =!= %s\n".format(
+              i,
+              unpackedReal.map(_.toString(16)).mkString("0x",", 0x",""),
+              unpackedCalc.map(_.toString(16)).mkString("0x",", 0x","")
+            )
           )
         }
       })
