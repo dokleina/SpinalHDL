@@ -2476,6 +2476,33 @@ class StreamUnpacker[T <: Data](
 
 object StreamPacker {
 
+  /** Packs a given layout of Data fields into a Stream
+    * Field layout is accepted as pairs of Data and a map of word indices to slice tuple. The slice tuple
+    * maps a slice of the outgoing word to a slice of the Data.
+    *
+    * Note, no overlap checking is performed.
+    *
+    * @param output Stream to write to
+    * @param layout Map of Data field to Map of word indices and slicing tuple
+    * @tparam T Stream Data type
+    * @return StreamPacker instance
+    */
+  def apply[T <: Data](output: Stream[T], layout: Map[Data, Map[Int, (Range, Range)]]): StreamPacker[T] = {
+
+    val WORD_COUNT = layout.values.map(_.keys.max).max + 1
+    val fullData = Bits(output.payloadType.getBitsWidth * WORD_COUNT bits).getZero
+
+    val allWords = fullData.subdivideIn(WORD_COUNT slices)
+
+    layout.foreach { case (layoutData, wordMap) =>
+      wordMap.foreach { case (wordInd, (wordRange, dataRange)) =>
+        allWords(wordInd).assignFromBits(layoutData.asBits(dataRange), wordRange.high, wordRange.low)
+      }
+    }
+
+    new StreamPacker(output, fullData)
+  }
+
   /** Packs a given layout of Data fields into a Stream.
     * Field layout is accepted as pairs of Data and their start bits. Starting bits are interpreted as absolute bit
     * positions within a multi-word layout. The StreamPacker will write as many words to `output` as necessary to pack
@@ -2491,28 +2518,35 @@ object StreamPacker {
   def apply[T <: Data](output: Stream[T], layout: List[(Data, Int)]): StreamPacker[T] = {
     require(layout.nonEmpty)
 
-    new StreamPacker[T](output, StreamUnpacker.layoutToWordMap(output.payloadType.getBitsWidth, layout))
+    val HIGHEST_BIT = layout.map{ case(d: Data, s: Int) => d.getBitsWidth + s }.max
+    val fullData = Bits(roundUp(HIGHEST_BIT, output.payloadType.getBitsWidth) bits).clearAll()
+
+    layout.foreach { case(d: Data, s: Int) =>
+      fullData.assignFromBits(d.asBits, s + d.getBitsWidth - 1, s)
+    }
+
+    new StreamPacker(output, fullData)
   }
 
-  /** Packs a given PackedBundle into a Stream.
+  /** Packs a given Bundle into a Stream.
     * The StreamPacker will write as many words to `output` as necessary to pack
-    * all fields. Fields that exceed a word width will be wrapped into as many subsequent words needed.
+    * all fields. Fields that exceed a word width will be wrapped into as many additional words as needed.
     *
     * Note, no overlap checking is performed.
     *
     * @param output Stream to write to
-    * @param packedbundle PackedBundle to pack from
+    * @param bundle Bundle to pack from
     * @tparam T Stream Data type
-    * @tparam B PackedBundel type
+    * @tparam B Bundle type
     * @return StreamPacker instance
     */
-  def apply[T <: Data, B <: PackedBundle](output: Stream[T], packedbundle: B): StreamPacker[T] = {
-    // Defer to the other `apply` method with a layout derived from the PackedBundle's mappings
-    StreamPacker(
+  def apply[T <: Data, B <: Bundle](output: Stream[T], bundle: B): StreamPacker[T] = {
+    new StreamPacker(
       output,
-      packedbundle.mappings.map { case (range, data) =>
-        data -> range.min
-      }.toList
+      bundle match {
+        case pb: PackedBundle => pb.packed
+        case b: Bundle => b.asBits
+      }
     )
   }
 }
@@ -2527,30 +2561,26 @@ object StreamPacker {
   *
   * `io.done` indicates when the last word has been packed.
   *
-  * Use the companion object `StreamPapcker` to create an instance.
+  * Use the companion object `StreamPacker` to create an instance.
   */
 class StreamPacker[T <: Data](
     stream: Stream[T],
-    layout: mutable.LinkedHashMap[Data, Map[Int, (Range, Range)]]
+    bitsToPack: Bits
 ) extends Area {
-
-  require(layout.nonEmpty)
-
-  private val dataIn = layout.keys.toList
 
   val io = new Bundle {
     val start = Bool()
     val done = Bool()
   }
 
-  private val counter = Counter(layout.values.flatMap(_.keys).max + 1)
+  private val counter = Counter((bitsToPack.getBitsWidth / stream.payloadType.getBitsWidth).toBigInt)
   private val running = RegInit(False)
 
   private val outValid = RegInit(False)
   private val outDone = RegInit(False)
   private val nextWord = Reg(stream.payloadType)
 
-  private val buffer = RegNextWhen(Vec(dataIn.map(_.asBits)), io.start)
+  private val buffer = RegNextWhen(bitsToPack.resizeLeft(roundUp(bitsToPack.getBitsWidth, stream.payloadType.getBitsWidth).toInt), io.start)
 
   when(io.start) {
     running.set()
@@ -2574,16 +2604,8 @@ class StreamPacker[T <: Data](
     nextWord := nextWord.getZero
     outValid := True
 
-    layout.foreach { case (layoutData, wordMap) =>
-      wordMap.foreach { case (wordInd, (wordRange, dataRange)) =>
-        when(counter.value === wordInd) {
-          nextWord.assignFromBits(
-            buffer(dataIn.indexOf(layoutData)).asBits(dataRange),
-            wordRange.max,
-            wordRange.min
-          )
-        }
-      }
+    whenIndexed(buffer.subdivideIn(stream.payloadType.getBitsWidth bits), counter.value) { wordSlice =>
+      nextWord.assignFromBits(wordSlice)
     }
   }
 

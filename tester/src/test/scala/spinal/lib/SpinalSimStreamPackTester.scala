@@ -16,17 +16,21 @@ class SpinalSimStreamPackTester extends SpinalAnyFunSuite {
     val a = UInt(16 bits)
   }
 
-  case class StreamPackFixture(offset: Int = 0, contiguousLayout : Boolean = false) extends Component {
+  case class PackTestUnit(var r: Int, var g: Int, var b: Int, var a: Int)
+
+  class IStreamPackFixture(val offset: Int, val contiguousLayout: Boolean) extends Component {
     val io = new Bundle {
       val inData = in(PackTestBundle())
       val start = in Bool()
       val outStream = master(new Stream(Bits(8 bits)))
       val done = out Bool()
     }
+  }
 
+  case class StreamPackStartBitFixture(override val offset: Int = 0, override val contiguousLayout : Boolean = false) extends IStreamPackFixture(offset, contiguousLayout) {
     val input = io.inData
 
-    val layout = List(
+    val layout: List[(Data, Int)] = List(
       input.r -> (0 + offset),
       input.g -> (8 + offset),
       input.b -> (16 + offset)
@@ -52,9 +56,35 @@ class SpinalSimStreamPackTester extends SpinalAnyFunSuite {
     io.done := packer.io.done
   }
 
-  case class PackTestUnit(var r: Int, var g: Int, var b: Int, var a: Int)
+  case class StreamPackSliceFixture(override val offset: Int = 0, override val contiguousLayout : Boolean = false) extends IStreamPackFixture(offset, contiguousLayout) {
+    val input = io.inData
 
-  def simDriver(doRandom : Boolean)(dut: StreamPackFixture): Unit = {
+    val layout: Map[Data, Map[Int, (Range, Range)]] = Map(
+      input.r -> Map(
+        0 -> ((offset to offset + 4), (0 to 4))
+      ),
+      input.g -> Map(
+        1 -> ((offset to offset + 5), (0 to 5))
+      ),
+      input.b -> Map(
+        2 -> ((offset to offset + 4), (0 to 4))
+      ),
+      input.a -> Map(
+        3 -> ((0 to 7), (0 to 7)),
+        4 -> ((0 to 7), (8 to 15))
+      )
+    )
+
+    val packer = StreamPacker[Bits](
+      io.outStream,
+      layout
+    )
+
+    packer.io.start := io.start
+    io.done := packer.io.done
+  }
+
+  def simDriver(doRandom : Boolean)(dut: IStreamPackFixture): Unit = {
     dut.clockDomain.forkStimulus(10)
 
     val scoreboard = ScoreboardInOrder[PackTestUnit]()
@@ -156,28 +186,48 @@ class SpinalSimStreamPackTester extends SpinalAnyFunSuite {
     simSuccess()
   }
 
-  test("aligned, always ready") {
-    SimConfig.compile(StreamPackFixture())
+  test("start bit layout: aligned, always ready") {
+    SimConfig.compile(StreamPackStartBitFixture())
       .doSim(simDriver(doRandom = false) _)
   }
 
-  test("aligned, random ready") {
-    SimConfig.compile(StreamPackFixture())
+  test("start bit layout: aligned, random ready") {
+    SimConfig.compile(StreamPackStartBitFixture())
       .doSim(simDriver(doRandom = true) _)
   }
 
-  test("unaligned, always ready") {
-    SimConfig.compile(StreamPackFixture(2))
+  test("start bit layout: unaligned, always ready") {
+    SimConfig.compile(StreamPackStartBitFixture(2))
       .doSim(simDriver(doRandom = false) _)
   }
 
-  test("unaligned, random ready") {
-    SimConfig.compile(StreamPackFixture(2))
+  test("start bit layout: unaligned, random ready") {
+    SimConfig.compile(StreamPackStartBitFixture(2))
       .doSim(simDriver(doRandom = true) _)
   }
 
-  test("contiguous") {
-    SimConfig.compile(StreamPackFixture(contiguousLayout = true))
+  test("start bit layout: contiguous") {
+    SimConfig.compile(StreamPackStartBitFixture(contiguousLayout = true))
       .doSim(simDriver(doRandom = false) _)
+  }
+
+  test("slice layout: aligned, always ready") {
+    SimConfig.compile(StreamPackSliceFixture())
+      .doSim(simDriver(doRandom = false) _)
+  }
+
+  test("slice layout: aligned, random ready") {
+    SimConfig.compile(StreamPackSliceFixture())
+      .doSim(simDriver(doRandom = true) _)
+  }
+
+  test("slice layout: unaligned, always ready") {
+    SimConfig.compile(StreamPackSliceFixture(2))
+      .doSim(simDriver(doRandom = false) _)
+  }
+
+  test("slice layout: unaligned, random ready") {
+    SimConfig.compile(StreamPackSliceFixture(2))
+      .doSim(simDriver(doRandom = true) _)
   }
 }
