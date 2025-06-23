@@ -2307,68 +2307,38 @@ class StreamTransactionExtender[T <: Data, T2 <: Data](
 
 object StreamUnpacker {
 
-  /** Decomposes a Data field into a map of words to Word-relative range -> Field-relative range. The starting bit
-    * is any absolute position within some set of words,
+  /** Unpacks a Stream into a given layout of Data fields
+    * Field layout is accepted as pairs of Data and a map of word indices to slice tuple. The slice tuple
+    * maps a slice of the outgoing word to a slice of the Data.
     *
-    * For example, a word with 16 bits starting at bit 4 decomposed into 8 bit words would result in:
-    * {
-    *   0 -> ((4 to 7) -> (0 to 3)),
-    *   1 -> ((0 to 7) -> (4 to 11)),
-    *   2 -> ((0 to 3) -> (12 to 15))
-    * }
+    * Note, no overlap checking is performed.
     *
-    * @param wordWidth Word width to decompose into it
-    * @param field Data to decompose
-    * @param startBit Bit to start at, as absolute position (may be greater than `wordWidth`)
-    * @return Map of word index to Word-relative range -> Field-relative range
+    * @param input Stream to read from
+    * @param layout Map of Data fields to Map of word indices and slicing tuple
+    * @tparam T Stream Data type
+    * @return StreamPacker instance
     */
-  def decomposeField(field: Data, startBit: Int, wordWidth: Int): Map[Int, (Range, Range)] = {
-    val lastBit = startBit + field.getBitsWidth - 1
-    // Determine which words the field falls into
-    val firstWord = startBit / wordWidth
-    val lastWord = (field.getBitsWidth + startBit - 1) / wordWidth
+  def apply[T <: Data](input: Stream[T], layout: Map[Data, Map[Int, (Range, Range)]]) = {
+    require(layout.nonEmpty)
 
-    (firstWord to lastWord).map { wordInd =>
-      // Make the current word's range
-      val curWord = (wordInd * wordWidth) until ((wordInd + 1) * wordWidth)
+    val WORD_COUNT = layout.values.map(_.keys.max).max + 1
+    val fullData = Reg(Bits(input.payloadType.getBitsWidth * WORD_COUNT bits).getZero)
 
-      // Find the largest range of the field that fits into the word, in absolute bits
-      // This is merely clipping the field first and last bits by the current word's min and max
-      val absWordRange = startBit.max(curWord.min) to lastBit.min(curWord.max)
+    val allWords = fullData.subdivideIn(WORD_COUNT slices)
 
-      // Find the range that the field's word-indexed range maps to in the field itself
-      // Just back off the starting bit from the word-indexed range
-      val relFieldRange = absWordRange.min - startBit to absWordRange.max - startBit
+    layout.foreach { case (data, wordMap) =>
+      wordMap.foreach { case (wordInd, (wordRange, dataRange)) =>
+        data.assignFromBits(allWords(wordInd)(wordRange), dataRange.high, dataRange.low)
+      }
+    }
 
-      // Convert the absolute word range into a relative one
-      val relWordRange = absWordRange.min - curWord.min to absWordRange.max - curWord.min
-
-      wordInd -> (relWordRange -> relFieldRange)
-    }.toMap
-  }
-
-  /** Converts a layout of Data and starting bit pairs into a map of word range to Data range slices for each word
-    * that the Data spans, indexed by each Data. The return type is a 2D map relating each Data to each word index.
-    * The range pairs for each word index represent which bits of the word (local to the width of the word) map to the
-    * bits of Data that lie within the word.
-    *
-    * @param wordWidth Width of the Stream's words
-    * @param layout List of Data to starting bit pairs
-    * @return Map of Data, Map of word index to word range, Data range pair
-    */
-  def layoutToWordMap(
-      wordWidth: Int,
-      layout: List[(Data, Int)]
-  ): mutable.LinkedHashMap[Data, Map[Int, (Range, Range)]] = {
-    layout.map { case (data, startBit) =>
-      data -> decomposeField(data, startBit, wordWidth)
-    }.toMapLinked
+    new StreamUnpacker[T](input, fullData)
   }
 
   /** Unpacks a Stream given a layout of Data fields.
     * Field layout is accepted as pairs of Data and their start bits. Starting bits are interpreted as absolute bit
     * positions within a multi-word layout. The StreamUnpacker will read as many words from `input` as necessary to
-    * unpack all fields. Fields that exceed a word width will be wrapped into as many subsequent words needed.
+    * unpack all fields. Fields that exceed a word width will be wrapped into as many additional words as needed.
     *
     * @param input Stream to read from
     * @param layout List of Data fields and their start bits
@@ -2378,26 +2348,53 @@ object StreamUnpacker {
   def apply[T <: Data](input: Stream[T], layout: List[(Data, Int)]): StreamUnpacker[T] = {
     require(layout.nonEmpty)
 
-    new StreamUnpacker[T](input, layoutToWordMap(input.payloadType.getBitsWidth, layout))
+    val HIGHEST_BIT = layout.map{ case(d: Data, s: Int) => d.getBitsWidth + s }.max
+    val fullData = Reg(Bits(roundUp(HIGHEST_BIT, input.payloadType.getBitsWidth) bits).getZero)
+
+    layout.foreach { case (data, startBit) =>
+      data.assignFromBits(fullData.asBits((startBit + data.getBitsWidth - 1) downto startBit))
+    }
+
+    new StreamUnpacker[T](input, fullData)
+  }
+
+  /** Unpacks a Stream into a given Bundle
+    * The StreamUnpacker will read as many words from `input` as necessary to unpack all fields. Fields that exceed a
+    * word width will be wrapped into as many additional words as needed.
+    *
+    * @param input Stream to read from
+    * @param bundle Bundle to unpack into
+    * @tparam T Stream Data type
+    * @return Unpacker instance
+    */
+  def apply[T <: Data](input: Stream[T], bundle: Bundle): StreamUnpacker[T] = {
+    val fullData = Reg(Bits(bundle.getBitsWidth bits).getZero)
+
+    bundle.assignFromBits(fullData)
+
+    new StreamUnpacker(
+      input,
+      fullData
+    )
   }
 
   /** Unpacks a Stream into a given PackedBundle
     * The StreamUnpacker will read as many words from `input` as necessary to unpack all fields. Fields that exceed a
-    * word width will be wrapped into as many subsequent words needed.
+    * word width will be wrapped into as many additional words as needed.
     *
     * @param input Stream to read from
-    * @param packedbundle PackedBundle to unpack into
+    * @param packedBundle PackedBundle to unpack into
     * @tparam T Stream Data type
-    * @tparam B PackedBundle type
     * @return Unpacker instance
     */
-  def apply[T <: Data, B <: PackedBundle](input: Stream[T], packedbundle: B): StreamUnpacker[T] = {
-    // Defer to the other `apply` method with a layout derived from the PackedBundle's mappings
-    StreamUnpacker(
+  def apply[T <: Data](input: Stream[T], packedBundle: PackedBundle): StreamUnpacker[T] = {
+    val fullData = Reg(Bits(packedBundle.getPackedWidth bits).getZero)
+
+    packedBundle.unpack(fullData)
+
+    new StreamUnpacker(
       input,
-      packedbundle.mappings.map { case (range, data) =>
-        data -> range.min
-      }.toList
+      fullData
     )
   }
 }
@@ -2414,64 +2411,43 @@ object StreamUnpacker {
   */
 class StreamUnpacker[T <: Data](
     stream: Stream[T],
-    layout: mutable.LinkedHashMap[Data, Map[Int, (Range, Range)]]
+    bitsToUnpack: Bits
 ) extends Area {
 
   val io = new Bundle {
     val start = Bool()
-    val dones = Bits(layout.keys.size bits)
-    val allDone = Bool()
-  }
-
-  private val fields = layout.keys.toList
-
-  // Make output registers, as bits
-  private val rData = fields.map { d =>
-    val regData = Reg(cloneOf(d.asBits)) init B(0)
-    d.assignFromBits(regData)
-    regData
+    val done = Bool()
   }
 
   private val running = Reg(Bool()) init False
-  private val dones = Reg(Bits(fields.length bits)) init B(0)
-  private val allDone = Reg(Bool()) init False
-  private val counter = Counter(layout.values.flatMap(_.keys).max + 1)
+  private val done = Reg(Bool()) init False
+  private val counter = Counter((bitsToUnpack.getBitsWidth / stream.payloadType.getBitsWidth).toBigInt)
 
-  private val inFlow = stream.takeWhen(running).toFlow
+  private val inFlow = stream.continueWhen(running).toFlow
 
   when(io.start) {
     counter.clear()
     running := True
   }
 
-  // Dones are only asserted for a single cycle
-  dones.clearAll()
-  allDone.clear()
+  // Done is only asserted for a single cycle
+  done.clear()
 
   when(inFlow.valid & running) {
     counter.increment()
 
-    // Latch any data in the current word
-    layout.foreach { case (layoutData, wordMap) =>
-      wordMap.foreach { case (wordInd, (wordRange, dataRange)) =>
-        when(counter.value === wordInd) {
-          rData(fields.indexOf(layoutData))(dataRange) := inFlow.payload.asBits(wordRange)
-        }
-      }
-
-      // Flag done at the last word of the data
-      dones(fields.indexOf(layoutData)).setWhen(counter.value === wordMap.keys.max)
+    whenIndexed(bitsToUnpack.subdivideIn(stream.payloadType.getBitsWidth bits), counter) { wordSlice =>
+      wordSlice.assignFromBits(inFlow.payload.asBits)
     }
 
     when(counter.willOverflowIfInc) {
       running.clear()
-      allDone.set()
+      done.set()
     }
   }
 
   // Output mapping
-  io.dones := dones
-  io.allDone := allDone
+  io.done := done
 }
 
 object StreamPacker {
@@ -2483,11 +2459,12 @@ object StreamPacker {
     * Note, no overlap checking is performed.
     *
     * @param output Stream to write to
-    * @param layout Map of Data field to Map of word indices and slicing tuple
+    * @param layout Map of Data fields to Map of word indices and slicing tuple
     * @tparam T Stream Data type
     * @return StreamPacker instance
     */
   def apply[T <: Data](output: Stream[T], layout: Map[Data, Map[Int, (Range, Range)]]): StreamPacker[T] = {
+    require(layout.nonEmpty)
 
     val WORD_COUNT = layout.values.map(_.keys.max).max + 1
     val fullData = Bits(output.payloadType.getBitsWidth * WORD_COUNT bits).getZero
@@ -2506,7 +2483,7 @@ object StreamPacker {
   /** Packs a given layout of Data fields into a Stream.
     * Field layout is accepted as pairs of Data and their start bits. Starting bits are interpreted as absolute bit
     * positions within a multi-word layout. The StreamPacker will write as many words to `output` as necessary to pack
-    * all fields. Fields that exceed a word width will be wrapped into as many subsequent words needed.
+    * all fields. Fields that exceed a word width will be wrapped into as many additional words as needed.
     *
     * Note, no overlap checking is performed.
     *
@@ -2519,7 +2496,7 @@ object StreamPacker {
     require(layout.nonEmpty)
 
     val HIGHEST_BIT = layout.map{ case(d: Data, s: Int) => d.getBitsWidth + s }.max
-    val fullData = Bits(roundUp(HIGHEST_BIT, output.payloadType.getBitsWidth) bits).clearAll()
+    val fullData = Bits(roundUp(HIGHEST_BIT, output.payloadType.getBitsWidth) bits).getZero
 
     layout.foreach { case(d: Data, s: Int) =>
       fullData.assignFromBits(d.asBits, s + d.getBitsWidth - 1, s)

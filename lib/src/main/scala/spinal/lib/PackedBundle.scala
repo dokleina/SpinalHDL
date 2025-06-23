@@ -204,7 +204,7 @@ class PackedBundle extends Bundle {
   * }}}
   * @param wordWidth Width of a word, as BitCount
   */
-class PackedWordBundle(wordWidth: BitCount) extends PackedBundle {
+class PackedWordBundle(val wordWidth: BitCount) extends PackedBundle {
 
   implicit class WordEnrich[T <: Data](t: T) {
 
