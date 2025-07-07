@@ -2463,9 +2463,11 @@ object StreamPacker {
     * @tparam T Stream Data type
     * @return StreamPacker instance
     */
+  @deprecated("Consider using the Data and Start Bit form.")
   def apply[T <: Data](output: Stream[T], layout: Map[Data, Map[Int, (Range, Range)]]): StreamPacker[T] = {
     require(layout.nonEmpty)
 
+    val wordIndices = layout.values.map(_.keys.max).toSeq
     val WORD_COUNT = layout.values.map(_.keys.max).max + 1
     val fullData = Bits(output.payloadType.getBitsWidth * WORD_COUNT bits).getZero
 
@@ -2477,7 +2479,7 @@ object StreamPacker {
       }
     }
 
-    new StreamPacker(output, fullData)
+    new StreamPacker(output, fullData, wordIndices)
   }
 
   /** Packs a given layout of Data fields into a Stream.
@@ -2495,14 +2497,18 @@ object StreamPacker {
   def apply[T <: Data](output: Stream[T], layout: List[(Data, Int)]): StreamPacker[T] = {
     require(layout.nonEmpty)
 
-    val HIGHEST_BIT = layout.map{ case(d: Data, s: Int) => d.getBitsWidth + s }.max
-    val fullData = Bits(roundUp(HIGHEST_BIT, output.payloadType.getBitsWidth) bits).getZero
+    val wordWidth = output.payload.getBitsWidth
+
+    val highBits = layout.map{ case(d: Data, s: Int) => d.getBitsWidth + s -1 }
+    val HIGHEST_BIT = highBits.max
+    val fullData = Bits(roundUp(HIGHEST_BIT +1, wordWidth) bits).getZero
+    val wordIndices = highBits.map(_ / wordWidth)
 
     layout.foreach { case(d: Data, s: Int) =>
       fullData.assignFromBits(d.asBits, s + d.getBitsWidth - 1, s)
     }
 
-    new StreamPacker(output, fullData)
+    new StreamPacker(output, fullData, wordIndices)
   }
 
   /** Packs a given Bundle into a Stream.
@@ -2518,13 +2524,35 @@ object StreamPacker {
     * @return StreamPacker instance
     */
   def apply[T <: Data, B <: Bundle](output: Stream[T], bundle: B): StreamPacker[T] = {
-    new StreamPacker(
-      output,
-      bundle match {
-        case pb: PackedBundle => pb.packed
-        case b: Bundle => b.asBits
-      }
-    )
+
+    val wordWidth = output.payload.getBitsWidth
+
+    bundle match {
+      case pb: PackedBundle =>
+
+        val wordIndices = pb.mappings.map { case (r, _) =>
+          r.high / wordWidth
+        }
+
+        new StreamPacker(
+          output,
+          pb.packed,
+          wordIndices
+        )
+
+      case b: Bundle =>
+
+        val elementData = b.elements.map(_._2)
+        val highBits = elementData.drop(1)
+          .scanLeft(elementData(0).getBitsWidth -1) { case (i, d) => i + d.getBitsWidth -1 }
+        val wordIndices = highBits.map(_ / wordWidth)
+
+        new StreamPacker(
+          output,
+          b.asBits,
+          wordIndices
+        )
+    }
   }
 }
 
@@ -2532,40 +2560,57 @@ object StreamPacker {
   *
   * `stream` is directly driven by this area.
   *
-  * `layout` Data is read directly
+  * `bitsToPack` are the bits to be packed into the stream.
+  *
+  * `doneFlags` is a list of word indices to set an associate bit in `io.dones`
   *
   * `io.start` indicates when to start packing. All `layout`'s Data is registered before packing.
   *
-  * `io.done` indicates when the last word has been packed.
+  * `io.done` is a set of bits indicating that an associate word index from `doneFlags` was packed
+  *
+  * `io.allDone` indicates when the last word has been packed.
   *
   * Use the companion object `StreamPacker` to create an instance.
   */
 class StreamPacker[T <: Data](
     stream: Stream[T],
-    bitsToPack: Bits
+    bitsToPack: Bits,
+    doneFlags: Seq[Int]
 ) extends Area {
 
   val io = new Bundle {
     val start = Bool()
-    val done = Bool()
+    val dones = Bits(doneFlags.length bits)
+    val allDone = Bool()
   }
 
-  private val counter = Counter((bitsToPack.getBitsWidth / stream.payloadType.getBitsWidth).toBigInt)
+  private val WORD_WIDTH = stream.payloadType.getBitsWidth
+  private val NUM_WORDS = (bitsToPack.getBitsWidth / WORD_WIDTH)
+
+  // Sanity check the done indices
+  require(doneFlags.forall(_ >= 0))
+  require(doneFlags.forall(_ < NUM_WORDS))
+
+  private val counter = Counter(NUM_WORDS)
   private val running = RegInit(False)
 
   private val outValid = RegInit(False)
   private val outDone = RegInit(False)
+  private val outDones = RegInit(B(0, doneFlags.length bits))
   private val nextWord = Reg(stream.payloadType)
 
-  private val buffer = RegNextWhen(bitsToPack.resizeLeft(roundUp(bitsToPack.getBitsWidth, stream.payloadType.getBitsWidth).toInt), io.start)
+  private val buffer = RegNextWhen(bitsToPack.resizeLeft(NUM_WORDS * WORD_WIDTH), io.start)
 
   when(io.start) {
     running.set()
     counter.clear()
+    outDones.clearAll()
+    outDone.clear()
   }
 
   when(stream.fire) {
     outValid.clear()
+    outDones.clearAll()
     outDone.clear()
   }
 
@@ -2578,16 +2623,20 @@ class StreamPacker[T <: Data](
     }
 
     // Generate the word
-    nextWord := nextWord.getZero
     outValid := True
 
-    whenIndexed(buffer.subdivideIn(stream.payloadType.getBitsWidth bits), counter.value) { wordSlice =>
+    whenIndexed(buffer.subdivideIn(NUM_WORDS slices), counter.value) { wordSlice =>
       nextWord.assignFromBits(wordSlice)
+    }
+
+    doneFlags.zip(outDones.asBools).foreach { case(ind, bit) =>
+      bit.setWhen(counter.value === ind)
     }
   }
 
   // Connect the outputs
   stream.payload := nextWord
   stream.valid := outValid
-  io.done := outDone
+  io.dones := outDones
+  io.allDone := outDone
 }
